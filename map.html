@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+    <meta charset="utf-8">
+    <title>Seattle Parks</title>
+    <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
+
+    <link href="https://api.mapbox.com/mapbox-gl-js/v2.5.0/mapbox-gl.css" rel="stylesheet">
+    <script src="https://api.mapbox.com/mapbox-gl-js/v2.5.0/mapbox-gl.js"></script>
+
+    <link rel="stylesheet" href="css/map.css">
+    <link rel="stylesheet" href="css/main.css">
+</head>
+
+<body>
+
+    <header>
+        <nav>
+            <a href="index.html">Home</a>
+            <a href="map.html">Map</a>
+            <a href="sources.html">Sources</a>
+        </nav>
+    </header>
+
+    <button id="toggle-panel">☰ Parks</button>
+
+    <main id="container">
+
+        <div id="side-panel">
+            <h2>Seattle Parks</h2>
+
+            <button id="sort-btn">Sort by PMA (desc) <br> (may take a few seconds)</button>
+            <button id="sort-distance-btn">Sort by Distance</button>
+            <button id="buffer-btn">Buffer</button>
+
+            <table>
+                <tr>
+                    <th>Park Name</th>
+                    <th>PMA</th>
+                    <th>Area (sq.m)</th>
+                    <th class="distance-header">Distance</th>
+                </tr>
+            </table>
+        </div>
+
+        <div id="map"></div>
+    </main>
+
+    <script>
+        mapboxgl.accessToken =
+            'pk.eyJ1Ijoiam9ubnlqczIiLCJhIjoiY21oZG56a3h5MDUybzJscHU5dDlveHEyMyJ9.Zj4MO5kQbqLf6QDwWWTs2A';
+
+        let map = new mapboxgl.Map({
+            container: 'map',
+            style: 'mapbox://styles/mapbox/outdoors-v12',
+            zoom: 11,
+            center: [-122.335167, 47.608013]
+        });
+
+        let parksData = null;
+        let userMarker = null;
+        let userLat = null, userLon = null;
+        let originalParksGeoJSON = null;
+
+        async function geojsonFetch() {
+            let response, parks, neighborhoods;
+
+            response = await fetch('assets/parks.geojson');
+            parks = await response.json();
+            parksData = parks;
+            originalParksGeoJSON = JSON.parse(JSON.stringify(parks));
+
+            response = await fetch('assets/neighborhoods.geojson');
+            neighborhoods = await response.json();
+
+            let table = document.querySelector("table");
+
+            parks.features.forEach((feature, idx) => {
+                let row = table.insertRow(-1);
+                row.dataset.parkIndex = idx;
+                row.dataset.distanceMeters = Infinity;
+                row.insertCell(0).innerHTML = feature.properties.NAME;
+                row.insertCell(1).innerHTML = feature.properties.PMA;
+                row.insertCell(2).innerHTML = Number(feature.properties.PARKSBND_AREA || 0).toFixed(0);
+
+                let dcell = row.insertCell(3);
+                dcell.className = "distance-cell";
+                dcell.innerText = "—";
+            });
+
+            map.on('load', function () {
+                map.addSource('parks', { type: 'geojson', data: parks });
+                map.addLayer({
+                    id: 'parks-layer',
+                    type: 'circle',
+                    source: 'parks',
+                    paint: {
+                        'circle-radius': 6,
+                        'circle-color': '#2ecc71',
+                        'circle-stroke-color': '#1abc9c',
+                        'circle-stroke-width': 2
+                    }
+                });
+
+                map.addSource('neighborhoods', { type: 'geojson', data: neighborhoods });
+                map.addLayer({
+                    id: 'neighborhoods-layer',
+                    type: 'fill',
+                    source: 'neighborhoods',
+                    paint: {
+                        'fill-color': '#3498db',
+                        'fill-opacity': 0.3
+                    }
+                });
+            });
+        }
+
+        geojsonFetch();
+
+        const sortBtn = document.getElementById("sort-btn");
+        sortBtn.addEventListener("click", function () {
+            let table = document.querySelector("table");
+            let switching = true;
+
+            while (switching) {
+                switching = false;
+                let rows = table.rows;
+
+                for (let i = 1; i < rows.length - 1; i++) {
+                    let x = parseFloat(rows[i].cells[1].innerHTML);
+                    let y = parseFloat(rows[i + 1].cells[1].innerHTML);
+
+                    if (x < y) {
+                        rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);
+                        switching = true;
+                        break;
+                    }
+                }
+            }
+        });
+
+        // This function find the distance in meters between two coordinate sets
+        function haversineDistanceMeters(lat1, lon1, lat2, lon2) {
+            function toRad(deg) { return deg * Math.PI / 180; }
+            const R = 6371000;
+            const dLat = toRad(lat2 - lat1);
+            const dLon = toRad(lon2 - lon1);
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+                      Math.sin(dLon/2) * Math.sin(dLon/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return R * c;
+        }
+
+        // This creates a point from the coordinates and checks the data is good
+        function getFeatureLonLat(feature) {
+            if (!feature || !feature.geometry) return null;
+            const geom = feature.geometry;
+            if (geom.type === "Point") {
+                return geom.coordinates;
+            }
+            return null;
+        }
+
+        // format meters into km string
+        function formatDistance(meters) {
+            if (!isFinite(meters)) return "—";
+            if (meters < 1000) {
+                return Math.round(meters) + " m";
+            } else {
+                return (meters / 1000).toFixed(2) + " km";
+            }
+        }
+
+        // Sort by Distance button logic
+        const sortDistanceBtn = document.getElementById("sort-distance-btn");
+        sortDistanceBtn.addEventListener("click", function () {
+            if (!parksData || !parksData.features) {
+                alert("Parks data is still loading — try again in a second.");
+                return;
+            }
+
+            if (!navigator.geolocation) {
+                alert("Geolocation is not available in this browser.");
+                return;
+            }
+
+            sortDistanceBtn.disabled = true;
+            sortDistanceBtn.innerText = "Requesting location...";
+
+            navigator.geolocation.getCurrentPosition(function (pos) {
+                userLat = pos.coords.latitude;
+                userLon = pos.coords.longitude;
+
+                // Create or move a marker for the user's location
+                if (userMarker) { userMarker.remove(); userMarker = null; }
+                userMarker = new mapboxgl.Marker({ color: '#0074D9' })
+                    .setLngLat([userLon, userLat])
+                    .setPopup(new mapboxgl.Popup({ offset: 25 }).setText('Your location'))
+                    .addTo(map);
+
+                // compute distance for each row using its parkIndex
+                const table = document.querySelector("table");
+                const rows = Array.from(table.rows).slice(1);
+
+                const rowsWithDistances = rows.map(row => {
+                    const idx = parseInt(row.dataset.parkIndex, 10);
+                    const feat = parksData.features[idx];
+                    let coords = getFeatureLonLat(feat);
+                    let distance = Infinity;
+                    if (coords && coords.length >= 2) {
+                        const featLon = coords[0];
+                        const featLat = coords[1];
+                        distance = haversineDistanceMeters(userLat, userLon, featLat, featLon);
+                    } else {
+                        distance = Infinity;
+                    }
+                    row.dataset.distanceMeters = distance;
+                    const dcell = row.cells[3];
+                    dcell.innerText = formatDistance(distance);
+                    return { row, distance, idx };
+                });
+
+                rowsWithDistances.sort((a, b) => a.distance - b.distance);
+
+                for (let entry of rowsWithDistances) {
+                    table.tBodies[0].appendChild(entry.row);
+                }
+
+                sortDistanceBtn.innerText = "Sort by Distance";
+                sortDistanceBtn.disabled = false;
+
+                // Focus the map onto the user's marker
+                if (userMarker) {
+                    map.flyTo({ center: [userLon, userLat], zoom: 14 });
+                    if (userMarker.getPopup) {
+                        userMarker.togglePopup();
+                        setTimeout(() => { try { userMarker.togglePopup(); } catch (e) {} }, 2500);
+                    }
+                }
+
+            }, function (err) {
+                sortDistanceBtn.disabled = false;
+                sortDistanceBtn.innerText = "Sort by Distance";
+                if (err.code === err.PERMISSION_DENIED) {
+                    alert("Location permission denied. Can't sort by distance.");
+                } else {
+                    alert("Unable to get location: " + (err.message || "unknown error"));
+                }
+            }, {
+                enableHighAccuracy: true,
+                timeout: 10000,
+                maximumAge: 0
+            });
+        });
+
+        const bufferBtn = document.getElementById("buffer-btn");
+        function milesToMeters(miles) { return miles * 1609.344; }
+
+        // Applies the buffer and hides anything outside the range
+        function applyBuffer(radiusMeters) {
+            const table = document.querySelector("table");
+            const rows = Array.from(table.rows).slice(1);
+
+            if (radiusMeters === null) {
+                const src = map.getSource('parks');
+                if (src) src.setData(originalParksGeoJSON);
+                rows.forEach(r => r.style.display = '');
+                return;
+            }
+
+            // compute distances if not already present
+            if (userLat === null || userLon === null) {
+                alert("No user location available. Click Buffer again to allow location access.");
+                return;
+            }
+
+            const filteredFeatures = [];
+            rows.forEach(row => {
+                const idx = parseInt(row.dataset.parkIndex, 10);
+                const feat = parksData.features[idx];
+                const coords = getFeatureLonLat(feat);
+                let distance = Infinity;
+                if (coords && coords.length >= 2) {
+                    const featLon = coords[0];
+                    const featLat = coords[1];
+                    distance = haversineDistanceMeters(userLat, userLon, featLat, featLon);
+                }
+
+                if (distance <= radiusMeters) {
+                    row.style.display = '';
+                    filteredFeatures.push(feat);
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+
+            // update parks shown
+            const filteredGeoJSON = { type: 'FeatureCollection', features: filteredFeatures };
+            const source = map.getSource('parks');
+            if (source) {
+                source.setData(filteredGeoJSON);
+            }
+        }
+
+        // Controls the buffer button
+        bufferBtn.addEventListener('click', function () {
+            if (userLat !== null && userLon !== null) {
+                createBufferDropdown();
+                return;
+            }
+
+            if (!navigator.geolocation) {
+                alert("Geolocation is not available in this browser.");
+                return;
+            }
+
+            bufferBtn.disabled = true;
+            bufferBtn.innerText = "Requesting location...";
+
+            navigator.geolocation.getCurrentPosition(function (pos) {
+                userLat = pos.coords.latitude;
+                userLon = pos.coords.longitude;
+
+                // create or move user marker
+                if (userMarker) { userMarker.remove(); userMarker = null; }
+                userMarker = new mapboxgl.Marker({ color: '#0074D9' })
+                    .setLngLat([userLon, userLat])
+                    .setPopup(new mapboxgl.Popup({ offset: 25 }).setText('Your location'))
+                    .addTo(map);
+
+                map.flyTo({ center: [userLon, userLat], zoom: 12 });
+
+                // compute distances for display
+                const table = document.querySelector("table");
+                const rows = Array.from(table.rows).slice(1);
+                rows.forEach(row => {
+                    const idx = parseInt(row.dataset.parkIndex, 10);
+                    const feat = parksData.features[idx];
+                    const coords = getFeatureLonLat(feat);
+                    let distance = Infinity;
+                    if (coords && coords.length >= 2) {
+                        distance = haversineDistanceMeters(userLat, userLon, coords[1], coords[0]);
+                    }
+                    row.dataset.distanceMeters = distance;
+                    row.cells[3].innerText = formatDistance(distance);
+                });
+
+                createBufferDropdown();
+                bufferBtn.disabled = false;
+                bufferBtn.innerText = "Buffer";
+
+            }, function (err) {
+                bufferBtn.disabled = false;
+                bufferBtn.innerText = "Buffer";
+                if (err.code === err.PERMISSION_DENIED) {
+                    alert("Location permission denied. Buffer requires location access.");
+                } else {
+                    alert("Unable to get location: " + (err.message || "unknown error"));
+                }
+            }, {
+                enableHighAccuracy: true,
+                timeout: 10000,
+                maximumAge: 0
+            });
+        });
+
+        // Create a dropdown for the buffer distances
+        function createBufferDropdown() {
+            if (document.getElementById('buffer-select')) return;
+
+            const btn = document.getElementById('buffer-btn');
+            const container = btn.parentNode;
+            const sel = document.createElement('select');
+            sel.id = 'buffer-select';
+            sel.title = 'Choose buffer radius';
+            const opts = [
+                { val: 'none', text: 'None' },
+                { val: '1', text: '1 mile' },
+                { val: '3', text: '3 miles' },
+                { val: '5', text: '5 miles' },
+                { val: '10', text: '10 miles' },
+                { val: '15', text: '15+ miles' }
+            ];
+            opts.forEach(o => {
+                const option = document.createElement('option');
+                option.value = o.val;
+                option.innerText = o.text;
+                sel.appendChild(option);
+            });
+
+            container.replaceChild(sel, btn);
+
+            // if user changes selection change the buffer
+            sel.addEventListener('change', function () {
+                const v = sel.value;
+                if (v === 'none') {
+                    applyBuffer(null);
+                } else {
+                    const miles = parseFloat(v);
+                    const meters = milesToMeters(miles);
+                    applyBuffer(meters);
+                }
+            });
+        }
+
+        const sidebar = document.getElementById("side-panel");
+        const toggleBtn = document.getElementById("toggle-panel");
+        toggleBtn.addEventListener("click", () => {
+            sidebar.classList.toggle("collapsed");
+            toggleBtn.classList.toggle("shifted");
+        });
+    </script>
+
+</body>
+</html>
