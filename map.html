@@ -1,19 +1,24 @@
 <!DOCTYPE html>
 <html lang="en-US">
 <head>
-    <meta charset="utf-8">
-    <title>Seattle Parks</title>
+    <meta charset="utf-8" />
+    <title>Seattle Parks — Satellite</title>
     <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
 
-    <link href="https://api.mapbox.com/mapbox-gl-js/v2.5.0/mapbox-gl.css" rel="stylesheet">
-    <script src="https://api.mapbox.com/mapbox-gl-js/v2.5.0/mapbox-gl.js"></script>
+    <!-- MapLibre GL JS -->
+    <link href="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.css" rel="stylesheet" />
+    <script src="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.js"></script>
 
     <link rel="stylesheet" href="css/map.css">
     <link rel="stylesheet" href="css/main.css">
+
+    <style>
+      /* tiny styles for the draggable pin in the sidebar and map pin element */
+
+    </style>
 </head>
 
 <body>
-
     <header>
         <nav>
             <a href="index.html">Home</a>
@@ -25,11 +30,17 @@
     <button id="toggle-panel">☰ Parks</button>
 
     <main id="container">
-
         <div id="side-panel">
             <h2>Seattle Parks</h2>
 
-            <button id="sort-btn">Sort by PMA (desc) <br> (may take a few seconds)</button>
+            <div id="pin-controls" title="Drag this pin onto the map to set a custom location">
+              <div id="drop-pin" draggable="true">
+                <div class="user-pin" aria-hidden="true"></div>
+              </div>
+              <small>Drag pin to place it on the map. Click the pin to remove it.</small>
+            </div>
+
+            <button id="sort-btn">Sort by PMA (desc)</button>
             <button id="sort-distance-btn">Sort by Distance</button>
             <button id="buffer-btn">Buffer</button>
 
@@ -43,93 +54,173 @@
             </table>
         </div>
 
-        <div id="map"></div>
+        <div id="map" style="position:relative; height: calc(100vh - 60px);"></div>
     </main>
 
     <script>
-        mapboxgl.accessToken =
-            'pk.eyJ1Ijoiam9ubnlqczIiLCJhIjoiY21oZG56a3h5MDUybzJscHU5dDlveHEyMyJ9.Zj4MO5kQbqLf6QDwWWTs2A';
+        // ----------------------------
+        // MapLibre map with satellite raster tiles (Esri World Imagery)
+        // ----------------------------
+        const satelliteStyle = {
+            version: 8,
+            name: "Esri World Imagery (simple)",
+            sources: {
+                "esri-world-imagery": {
+                    type: "raster",
+                    tiles: [
+                      "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                    ],
+                    tileSize: 256,
+                    attribution: "Tiles © Esri"
+                }
+            },
+            layers: [
+                {
+                    id: "esri-satellite",
+                    type: "raster",
+                    source: "esri-world-imagery",
+                    minzoom: 0,
+                    maxzoom: 19
+                }
+            ]
+        };
 
-        let map = new mapboxgl.Map({
+        const map = new maplibregl.Map({
             container: 'map',
-            style: 'mapbox://styles/mapbox/outdoors-v12',
-            zoom: 11,
-            center: [-122.335167, 47.608013]
+            style: satelliteStyle,
+            center: [-122.335167, 47.608013],
+            zoom: 11
         });
 
+        // ----------------------------
+        // App state & helpers
+        // ----------------------------
         let parksData = null;
-        let userMarker = null;
-        let userLat = null, userLon = null;
         let originalParksGeoJSON = null;
 
+        let deviceMarker = null;
+        let customPinMarker = null;
+        let userLat = null, userLon = null; // cleared when unknown
+
+        function toRad(deg) { return deg * Math.PI / 180; }
+        function haversineDistanceMeters(lat1, lon1, lat2, lon2) {
+            // require Number.isFinite so null/undefined are not treated as valid coords
+            if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) return Infinity;
+            const R = 6371000;
+            const dLat = toRad(lat2 - lat1);
+            const dLon = toRad(lon2 - lon1);
+            const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2)) * Math.sin(dLon/2)**2;
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return R * c;
+        }
+        function formatDistance(meters) {
+            // return em-dash when unknown
+            if (!Number.isFinite(meters)) return "—";
+            if (meters < 1000) return Math.round(meters) + " m";
+            return (meters / 1000).toFixed(2) + " km";
+        }
+        function getFeatureLonLat(feature) {
+            if (!feature || !feature.geometry) return null;
+            if (feature.geometry.type === "Point") return feature.geometry.coordinates;
+            return null;
+        }
+
+        // ----------------------------
+        // Load GeoJSON (parks & neighborhoods)
+        // ----------------------------
         async function geojsonFetch() {
-            let response, parks, neighborhoods;
+            try {
+                const parksResp = await fetch('assets/parks.geojson');
+                parksData = await parksResp.json();
+                originalParksGeoJSON = JSON.parse(JSON.stringify(parksData));
 
-            response = await fetch('assets/parks.geojson');
-            parks = await response.json();
-            parksData = parks;
-            originalParksGeoJSON = JSON.parse(JSON.stringify(parks));
+                const nbhdResp = await fetch('assets/neighborhoods.geojson');
+                const neighborhoods = await nbhdResp.json();
 
-            response = await fetch('assets/neighborhoods.geojson');
-            neighborhoods = await response.json();
+                // build table rows for parks
+                const table = document.querySelector("table");
+                parksData.features.forEach((feature, idx) => {
+                    let row = table.insertRow(-1);
+                    row.dataset.parkIndex = idx;
+                    row.dataset.distanceMeters = Infinity;
+                    row.insertCell(0).innerHTML = feature.properties.NAME || '';
+                    row.insertCell(1).innerHTML = feature.properties.PMA || '';
+                    row.insertCell(2).innerHTML = Number(feature.properties.PARKSBND_AREA || 0).toFixed(0);
+                    let dcell = row.insertCell(3);
+                    dcell.className = "distance-cell";
+                    dcell.innerText = "—";
 
-            let table = document.querySelector("table");
-
-            parks.features.forEach((feature, idx) => {
-                let row = table.insertRow(-1);
-                row.dataset.parkIndex = idx;
-                row.dataset.distanceMeters = Infinity;
-                row.insertCell(0).innerHTML = feature.properties.NAME;
-                row.insertCell(1).innerHTML = feature.properties.PMA;
-                row.insertCell(2).innerHTML = Number(feature.properties.PARKSBND_AREA || 0).toFixed(0);
-
-                let dcell = row.insertCell(3);
-                dcell.className = "distance-cell";
-                dcell.innerText = "—";
-            });
-
-            map.on('load', function () {
-                map.addSource('parks', { type: 'geojson', data: parks });
-                map.addLayer({
-                    id: 'parks-layer',
-                    type: 'circle',
-                    source: 'parks',
-                    paint: {
-                        'circle-radius': 6,
-                        'circle-color': '#2ecc71',
-                        'circle-stroke-color': '#1abc9c',
-                        'circle-stroke-width': 2
-                    }
+                    row.addEventListener('click', () => {
+                        const coords = getFeatureLonLat(feature);
+                        if (coords) map.flyTo({ center: coords, zoom: 15 });
+                    });
                 });
 
-                map.addSource('neighborhoods', { type: 'geojson', data: neighborhoods });
-                map.addLayer({
-                    id: 'neighborhoods-layer',
-                    type: 'fill',
-                    source: 'neighborhoods',
-                    paint: {
-                        'fill-color': '#3498db',
-                        'fill-opacity': 0.3
+                map.on('load', () => {
+                    // add parks source and layers (circle + optional icon symbol)
+                    if (!map.getSource('parks')) {
+                        map.addSource('parks', { type: 'geojson', data: parksData });
                     }
+
+                    // circle layer used to show park location (smaller, dark green, white outline)
+                    if (!map.getLayer('parks-circle')) {
+                        map.addLayer({
+                            id: 'parks-circle',
+                            type: 'circle',
+                            source: 'parks',
+                            paint: {
+                                'circle-radius': 4,                 // smaller
+                                'circle-color': '#114B35',         // dark green
+                                'circle-stroke-color': '#ffffff',  // white outline
+                                'circle-stroke-width': 2,
+                                'circle-opacity': 0.95
+                            }
+                        });
+                    }
+
+                    // neighborhoods: intentionally no blue fill/haze; can add outline if desired.
                 });
-            });
+
+            } catch (err) {
+                console.error("Failed to load geojson:", err);
+                alert("Error loading map data. See console for details.");
+            }
         }
 
         geojsonFetch();
 
-        const sortBtn = document.getElementById("sort-btn");
-        sortBtn.addEventListener("click", function () {
-            let table = document.querySelector("table");
-            let switching = true;
+        // ----------------------------
+        // Update distances & table
+        // ----------------------------
+        function updateAllDistancesAndTable() {
+            const table = document.querySelector("table");
+            const rows = Array.from(table.rows).slice(1);
+            rows.forEach(row => {
+                const idx = parseInt(row.dataset.parkIndex, 10);
+                const feat = parksData.features[idx];
+                const coords = getFeatureLonLat(feat);
+                let distance = Infinity;
+                // use Number.isFinite to avoid coercion (null -> 0)
+                if (coords && coords.length >= 2 && Number.isFinite(userLat) && Number.isFinite(userLon)) {
+                    distance = haversineDistanceMeters(userLat, userLon, coords[1], coords[0]);
+                }
+                row.dataset.distanceMeters = distance;
+                row.cells[3].innerText = formatDistance(distance);
+            });
+        }
 
+        // ----------------------------
+        // Sort by PMA (kept)
+        // ----------------------------
+        document.getElementById("sort-btn").addEventListener("click", () => {
+            const table = document.querySelector("table");
+            let switching = true;
             while (switching) {
                 switching = false;
-                let rows = table.rows;
-
+                const rows = table.rows;
                 for (let i = 1; i < rows.length - 1; i++) {
-                    let x = parseFloat(rows[i].cells[1].innerHTML);
-                    let y = parseFloat(rows[i + 1].cells[1].innerHTML);
-
+                    let x = parseFloat(rows[i].cells[1].innerHTML) || 0;
+                    let y = parseFloat(rows[i + 1].cells[1].innerHTML) || 0;
                     if (x < y) {
                         rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);
                         switching = true;
@@ -139,139 +230,86 @@
             }
         });
 
-        // This function find the distance in meters between two coordinate sets
-        function haversineDistanceMeters(lat1, lon1, lat2, lon2) {
-            function toRad(deg) { return deg * Math.PI / 180; }
-            const R = 6371000;
-            const dLat = toRad(lat2 - lat1);
-            const dLon = toRad(lon2 - lon1);
-            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-                      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
-                      Math.sin(dLon/2) * Math.sin(dLon/2);
-            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-            return R * c;
-        }
-
-        // This creates a point from the coordinates and checks the data is good
-        function getFeatureLonLat(feature) {
-            if (!feature || !feature.geometry) return null;
-            const geom = feature.geometry;
-            if (geom.type === "Point") {
-                return geom.coordinates;
-            }
-            return null;
-        }
-
-        // format meters into km string
-        function formatDistance(meters) {
-            if (!isFinite(meters)) return "—";
-            if (meters < 1000) {
-                return Math.round(meters) + " m";
-            } else {
-                return (meters / 1000).toFixed(2) + " km";
-            }
-        }
-
-        // Sort by Distance button logic
-        const sortDistanceBtn = document.getElementById("sort-distance-btn");
-        sortDistanceBtn.addEventListener("click", function () {
+        document.getElementById("sort-distance-btn").addEventListener("click", function () {
             if (!parksData || !parksData.features) {
                 alert("Parks data is still loading — try again in a second.");
+                return;
+            }
+
+            if (customPinMarker) {
+                const lngLat = customPinMarker.getLngLat();
+                userLat = lngLat.lat;
+                userLon = lngLat.lng;
+                updateAllDistancesAndSortTable(); // pin path already sorts
+                map.flyTo({ center: [userLon, userLat], zoom: 14 });
                 return;
             }
 
             if (!navigator.geolocation) {
                 alert("Geolocation is not available in this browser.");
                 return;
-            }
+           }
 
-            sortDistanceBtn.disabled = true;
-            sortDistanceBtn.innerText = "Requesting location...";
+            const btn = this;
+            btn.disabled = true;
+            btn.innerText = "Requesting location...";
 
-            navigator.geolocation.getCurrentPosition(function (pos) {
+            navigator.geolocation.getCurrentPosition(pos => {
                 userLat = pos.coords.latitude;
                 userLon = pos.coords.longitude;
 
-                // Create or move a marker for the user's location
-                if (userMarker) { userMarker.remove(); userMarker = null; }
-                userMarker = new mapboxgl.Marker({ color: '#0074D9' })
+                if (deviceMarker) { deviceMarker.remove(); deviceMarker = null; }
+                deviceMarker = new maplibregl.Marker({ color: '#0074D9' })
                     .setLngLat([userLon, userLat])
-                    .setPopup(new mapboxgl.Popup({ offset: 25 }).setText('Your location'))
+                    .setPopup(new maplibregl.Popup({ offset: 25 }).setText('Your location'))
                     .addTo(map);
 
-                // compute distance for each row using its parkIndex
-                const table = document.querySelector("table");
-                const rows = Array.from(table.rows).slice(1);
+        // *** Important: update distances AND sort the table ***
+                updateAllDistancesAndSortTable();
 
-                const rowsWithDistances = rows.map(row => {
-                    const idx = parseInt(row.dataset.parkIndex, 10);
-                    const feat = parksData.features[idx];
-                    let coords = getFeatureLonLat(feat);
-                    let distance = Infinity;
-                    if (coords && coords.length >= 2) {
-                        const featLon = coords[0];
-                        const featLat = coords[1];
-                        distance = haversineDistanceMeters(userLat, userLon, featLat, featLon);
-                    } else {
-                        distance = Infinity;
-                    }
-                    row.dataset.distanceMeters = distance;
-                    const dcell = row.cells[3];
-                    dcell.innerText = formatDistance(distance);
-                    return { row, distance, idx };
-                });
+                btn.disabled = false;
+                btn.innerText = "Sort by Distance";
 
-                rowsWithDistances.sort((a, b) => a.distance - b.distance);
-
-                for (let entry of rowsWithDistances) {
-                    table.tBodies[0].appendChild(entry.row);
-                }
-
-                sortDistanceBtn.innerText = "Sort by Distance";
-                sortDistanceBtn.disabled = false;
-
-                // Focus the map onto the user's marker
-                if (userMarker) {
-                    map.flyTo({ center: [userLon, userLat], zoom: 14 });
-                    if (userMarker.getPopup) {
-                        userMarker.togglePopup();
-                        setTimeout(() => { try { userMarker.togglePopup(); } catch (e) {} }, 2500);
-                    }
-                }
-
-            }, function (err) {
-                sortDistanceBtn.disabled = false;
-                sortDistanceBtn.innerText = "Sort by Distance";
+                map.flyTo({ center: [userLon, userLat], zoom: 14 });
+                try { deviceMarker.togglePopup(); setTimeout(()=>deviceMarker.togglePopup(), 2500); } catch(e){}
+            }, err => {
+                btn.disabled = false;
+                btn.innerText = "Sort by Distance";
                 if (err.code === err.PERMISSION_DENIED) {
                     alert("Location permission denied. Can't sort by distance.");
                 } else {
                     alert("Unable to get location: " + (err.message || "unknown error"));
                 }
-            }, {
-                enableHighAccuracy: true,
-                timeout: 10000,
-                maximumAge: 0
-            });
+            }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
         });
 
+        function updateAllDistancesAndSortTable() {
+            updateAllDistancesAndTable();
+            const table = document.querySelector("table");
+            const rows = Array.from(table.rows).slice(1);
+            const rowsWithDistances = rows.map(row => ({ row, distance: parseFloat(row.dataset.distanceMeters || Infinity) }));
+            rowsWithDistances.sort((a,b) => a.distance - b.distance);
+            for (let entry of rowsWithDistances) table.tBodies[0].appendChild(entry.row);
+        }
+
+        // ----------------------------
+        // Buffer (prefers custom pin)
+        // ----------------------------
         const bufferBtn = document.getElementById("buffer-btn");
         function milesToMeters(miles) { return miles * 1609.344; }
-
-        // Applies the buffer and hides anything outside the range
         function applyBuffer(radiusMeters) {
             const table = document.querySelector("table");
             const rows = Array.from(table.rows).slice(1);
 
             if (radiusMeters === null) {
                 const src = map.getSource('parks');
-                if (src) src.setData(originalParksGeoJSON);
+                if (src && originalParksGeoJSON) src.setData(originalParksGeoJSON);
                 rows.forEach(r => r.style.display = '');
                 return;
             }
 
-            // compute distances if not already present
-            if (userLat === null || userLon === null) {
-                alert("No user location available. Click Buffer again to allow location access.");
+            if (!Number.isFinite(userLat) || !Number.isFinite(userLon)) {
+                alert("No user location available. Click Buffer again to allow location access or place a pin.");
                 return;
             }
 
@@ -282,11 +320,8 @@
                 const coords = getFeatureLonLat(feat);
                 let distance = Infinity;
                 if (coords && coords.length >= 2) {
-                    const featLon = coords[0];
-                    const featLat = coords[1];
-                    distance = haversineDistanceMeters(userLat, userLon, featLat, featLon);
+                    distance = haversineDistanceMeters(userLat, userLon, coords[1], coords[0]);
                 }
-
                 if (distance <= radiusMeters) {
                     row.style.display = '';
                     filteredFeatures.push(feat);
@@ -295,19 +330,30 @@
                 }
             });
 
-            // update parks shown
             const filteredGeoJSON = { type: 'FeatureCollection', features: filteredFeatures };
             const source = map.getSource('parks');
-            if (source) {
-                source.setData(filteredGeoJSON);
-            }
+            if (source) source.setData(filteredGeoJSON);
         }
 
-        // Controls the buffer button
         bufferBtn.addEventListener('click', function () {
-            if (userLat !== null && userLon !== null) {
+            if (customPinMarker) {
+                const lngLat = customPinMarker.getLngLat();
+                userLat = lngLat.lat;
+                userLon = lngLat.lng;
+                updateAllDistancesAndTable();
                 createBufferDropdown();
                 return;
+            }
+
+            if (deviceMarker) {
+                const lngLat = deviceMarker.getLngLat();
+                if (lngLat) {
+                    userLat = lngLat.lat;
+                    userLon = lngLat.lng;
+                    updateAllDistancesAndTable();
+                    createBufferDropdown();
+                    return;
+                }
             }
 
             if (!navigator.geolocation) {
@@ -315,60 +361,40 @@
                 return;
             }
 
-            bufferBtn.disabled = true;
-            bufferBtn.innerText = "Requesting location...";
+            const btn = this;
+            btn.disabled = true;
+            btn.innerText = "Requesting location...";
 
-            navigator.geolocation.getCurrentPosition(function (pos) {
+            navigator.geolocation.getCurrentPosition(pos => {
                 userLat = pos.coords.latitude;
                 userLon = pos.coords.longitude;
 
-                // create or move user marker
-                if (userMarker) { userMarker.remove(); userMarker = null; }
-                userMarker = new mapboxgl.Marker({ color: '#0074D9' })
+                if (deviceMarker) { deviceMarker.remove(); deviceMarker = null; }
+                deviceMarker = new maplibregl.Marker({ color: '#0074D9' })
                     .setLngLat([userLon, userLat])
-                    .setPopup(new mapboxgl.Popup({ offset: 25 }).setText('Your location'))
+                    .setPopup(new maplibregl.Popup({ offset: 25 }).setText('Your location'))
                     .addTo(map);
 
                 map.flyTo({ center: [userLon, userLat], zoom: 12 });
 
-                // compute distances for display
-                const table = document.querySelector("table");
-                const rows = Array.from(table.rows).slice(1);
-                rows.forEach(row => {
-                    const idx = parseInt(row.dataset.parkIndex, 10);
-                    const feat = parksData.features[idx];
-                    const coords = getFeatureLonLat(feat);
-                    let distance = Infinity;
-                    if (coords && coords.length >= 2) {
-                        distance = haversineDistanceMeters(userLat, userLon, coords[1], coords[0]);
-                    }
-                    row.dataset.distanceMeters = distance;
-                    row.cells[3].innerText = formatDistance(distance);
-                });
-
+                updateAllDistancesAndTable();
                 createBufferDropdown();
-                bufferBtn.disabled = false;
-                bufferBtn.innerText = "Buffer";
 
-            }, function (err) {
-                bufferBtn.disabled = false;
-                bufferBtn.innerText = "Buffer";
+                btn.disabled = false;
+                btn.innerText = "Buffer";
+            }, err => {
+                btn.disabled = false;
+                btn.innerText = "Buffer";
                 if (err.code === err.PERMISSION_DENIED) {
                     alert("Location permission denied. Buffer requires location access.");
                 } else {
                     alert("Unable to get location: " + (err.message || "unknown error"));
                 }
-            }, {
-                enableHighAccuracy: true,
-                timeout: 10000,
-                maximumAge: 0
-            });
+            }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
         });
 
-        // Create a dropdown for the buffer distances
         function createBufferDropdown() {
             if (document.getElementById('buffer-select')) return;
-
             const btn = document.getElementById('buffer-btn');
             const container = btn.parentNode;
             const sel = document.createElement('select');
@@ -388,29 +414,169 @@
                 option.innerText = o.text;
                 sel.appendChild(option);
             });
-
             container.replaceChild(sel, btn);
-
-            // if user changes selection change the buffer
             sel.addEventListener('change', function () {
                 const v = sel.value;
-                if (v === 'none') {
-                    applyBuffer(null);
-                } else {
-                    const miles = parseFloat(v);
-                    const meters = milesToMeters(miles);
-                    applyBuffer(meters);
-                }
+                if (v === 'none') applyBuffer(null);
+                else applyBuffer(milesToMeters(parseFloat(v)));
             });
         }
 
-        const sidebar = document.getElementById("side-panel");
-        const toggleBtn = document.getElementById("toggle-panel");
-        toggleBtn.addEventListener("click", () => {
-            sidebar.classList.toggle("collapsed");
-            toggleBtn.classList.toggle("shifted");
+        // ----------------------------
+        // Sidebar toggle
+        // ----------------------------
+        document.getElementById("toggle-panel").addEventListener("click", () => {
+            document.getElementById("side-panel").classList.toggle("collapsed");
+            document.getElementById("toggle-panel").classList.toggle("shifted");
         });
-    </script>
 
+        // ----------------------------
+        // Drag & drop pin logic (same UX as before)
+        // ----------------------------
+        const dropPin = document.getElementById('drop-pin');
+        const mapDiv = document.getElementById('map');
+
+        dropPin.addEventListener('click', () => {
+            if (customPinMarker) { removeCustomPin(); return; }
+            const center = map.getCenter();
+            placeCustomPin(center.lng, center.lat);
+        });
+
+        dropPin.addEventListener('dragstart', (evt) => {
+            evt.dataTransfer.setData('text/plain', 'dropping-pin');
+        });
+
+        mapDiv.addEventListener('dragover', (evt) => {
+            evt.preventDefault();
+            evt.dataTransfer.dropEffect = 'copy';
+        });
+
+        mapDiv.addEventListener('drop', (evt) => {
+            evt.preventDefault();
+            const dragged = evt.dataTransfer.getData('text/plain');
+            if (dragged !== 'dropping-pin') return;
+            const rect = mapDiv.getBoundingClientRect();
+            const x = evt.clientX - rect.left;
+            const y = evt.clientY - rect.top;
+            const lngLat = map.unproject([x, y]);
+            placeCustomPin(lngLat.lng, lngLat.lat);
+        });
+
+        function placeCustomPin(lng, lat) {
+            if (customPinMarker) removeCustomPin();
+
+            const outer = document.createElement('div'); // this is what MapLibre moves
+            const inner = document.createElement('div'); // this is where you style
+            inner.className = 'marker-clickable';
+            outer.appendChild(inner);
+
+            customPinMarker = new maplibregl.Marker({ element: outer, draggable: true })
+              .setLngLat([lng, lat])
+              .addTo(map);
+            // AUTHORITATIVE: set user location to the pin immediately
+            userLat = lat;
+            userLon = lng;
+
+            // refresh distances immediate to the pin location
+            updateAllDistancesAndSortTable();
+
+            outer.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                removeCustomPin();
+            });
+
+            customPinMarker.on('dragend', () => {
+                const lngLat = customPinMarker.getLngLat();
+                userLat = lngLat.lat;
+                userLon = lngLat.lng;
+                updateAllDistancesAndSortTable();
+            });
+
+            map.flyTo({ center: [lng, lat], zoom: 14 });
+        }
+
+        function removeCustomPin() {
+            if (!customPinMarker) return;
+            try { customPinMarker.remove(); } catch(e){}
+            customPinMarker = null;
+
+            // FALLBACK: use deviceMarker's coords if we already have it
+            if (deviceMarker) {
+                try {
+                    const pos = deviceMarker.getLngLat();
+                    if (pos && Number.isFinite(pos.lat) && Number.isFinite(pos.lng)) {
+                        userLat = pos.lat;
+                        userLon = pos.lng;
+                        map.flyTo({ center: [userLon, userLat], zoom: 14 });
+                    } else {
+                        userLat = userLon = null;
+                    }
+                } catch (e) {
+                    // defensively clear if anything goes wrong
+                    userLat = userLon = null;
+                }
+            } else {
+                // no device location available -> clear user coords so table shows em-dashes
+                userLat = userLon = null;
+            }
+
+            // Immediately refresh distances to either device location or em-dashes
+            updateAllDistancesAndSortTable();
+        }
+
+        // ----------------------------
+        // Hover popup for parks (name + distance or em-dash)
+        // ----------------------------
+        // create single popup instance that we reuse
+        const hoverPopup = new maplibregl.Popup({
+            closeButton: false,
+            closeOnClick: false,
+            offset: 10
+        });
+
+        // show popup on mouseenter on parks-circle
+        map.on('mouseenter', 'parks-circle', (e) => {
+            // change cursor
+            map.getCanvas().style.cursor = 'pointer';
+
+            // get first feature under mouse
+            const feature = e.features && e.features[0];
+            if (!feature) return;
+
+            const coords = getFeatureLonLat(feature);
+            let html = `<strong>${feature.properties.NAME || 'Unnamed'}</strong>`;
+
+            // Always show a distance line: formatted distance if known, otherwise em-dash "—"
+            if (coords && coords.length >= 2) {
+                if (Number.isFinite(userLat) && Number.isFinite(userLon)) {
+                    const dist = haversineDistanceMeters(userLat, userLon, coords[1], coords[0]);
+                    html += `<div style="margin-top:4px; font-size:90%;">Distance: ${formatDistance(dist)}</div>`;
+                } else {
+                    html += `<div style="margin-top:4px; font-size:90%;">Distance: —</div>`;
+                }
+            } else {
+                html += `<div style="margin-top:4px; font-size:90%;">Distance: —</div>`;
+            }
+
+            // place popup at the feature coordinate
+            if (coords) {
+                hoverPopup.setLngLat(coords).setHTML(html).addTo(map);
+            }
+        });
+
+        map.on('mouseleave', 'parks-circle', () => {
+            map.getCanvas().style.cursor = '';
+            hoverPopup.remove();
+        });
+
+        // Ensure the parks-circle layer exists before attaching hover events.
+        // If the layer isn't ready yet, listen for 'load' and attach events after source/layer creation.
+        map.on('styledata', () => {
+            if (map.getLayer('parks-circle')) {
+                // layer exists; no-op here because we've already attached events.
+            }
+        });
+
+    </script>
 </body>
 </html>

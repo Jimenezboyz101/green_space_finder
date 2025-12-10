@@ -96,3 +96,43 @@ tr:nth-child(even) {
 td.distance-cell { text-align: right; font-variant-numeric: tabular-nums; }
 
 th.distance-header { text-align: right; }
+
+/* Base pin style (sidebar + on-map) */
+#drop-pin {
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    padding:6px 8px;
+    background:#eee;
+    border-radius:6px;
+    cursor:grab;
+    user-select:none;
+    margin-bottom:8px;
+}
+#drop-pin:active { cursor:grabbing; }
+
+.user-pin {
+    width:24px;
+    height:24px;
+    background: #D00000;
+    border-radius:50% 50% 50% 0;
+    transform: rotate(-45deg) translate(-1px, -1px);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.4);
+    border:2px solid white;
+}
+
+.user-pin:hover { filter:brightness(1.05); }
+
+/* ensure the marker element is clickable */
+.marker-clickable {
+    cursor: pointer;
+    width:24px;
+    height:24px;
+    transform: rotate(-45deg) translate(-1px, -1px);
+    background: #D00000;
+    border-radius:50% 50% 50% 0;
+    border:2px solid white;
+}
+
+/* popup minor style override */
+.mapboxgl-popup-content { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; }
