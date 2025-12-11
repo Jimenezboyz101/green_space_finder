@@ -16,15 +16,18 @@
 <body>
     <header>
         <nav>
-            <a href="index.html">Home</a>
-            <a href="map.html">Map</a>
-            <a href="sources.html">Sources</a>
+            <a href="index.html" class="logo">Green Space Finder</a>
+            <div class="nav-links">
+                <a href="index.html">Home</a>
+                <a href="map.html"aria-current="page">Map</a>
+                <a href="sources.html">Sources</a>
+            </div>
         </nav>
     </header>
 
     <button id="toggle-panel">☰ Parks</button>
 
-    <main id="container" style="display:flex; align-items:stretch;">
+    <main id="container">
         <div id="side-panel">
             <h2>Seattle Green Space Finder</h2>
 
@@ -32,7 +35,7 @@
               <div id="drop-pin" draggable="true">
                 <div class="user-pin" aria-hidden="true"></div>
               </div>
-              <small>Drag the pin to place it on the map. Click the pin to remove it.</small>
+              <small>Drag pin to place it on the map. Click the pin to remove it.</small>
             </div>
 
             <button id="sort-btn">Sort by PMA</button>
@@ -49,7 +52,7 @@
             </table>
         </div>
 
-        <div id="map" style="position:relative; flex:1; height: calc(100vh - 60px);"></div>
+        <div id="map" style="position:relative; height: 100vh;"></div>
     </main>
 
     <script>
@@ -137,7 +140,21 @@
                 parksData.features.forEach((feature, idx) => {
                     let row = table.insertRow(-1);
                     row.dataset.parkIndex = idx;
+
+                    // --- WORKING PMA LOGIC MERGED IN ---
+                    // Read text, normalize (strip commas/whitespace), parse numeric PMA
+                    const pmaRaw = feature.properties && feature.properties.PMA ? String(feature.properties.PMA) : '';
+                    const pmaNormalized = pmaRaw.replace(/,/g, '').trim();
+                    const pmaNum = Number(pmaNormalized);
+                    // store both dataset (string) and a numeric property for fast sort
+                    row.dataset.pma = Number.isFinite(pmaNum) ? String(pmaNum) : String(NaN);
+                    // numeric property avoids repeated Number(...) conversions later
+                    row._pmaNum = Number.isFinite(pmaNum) ? pmaNum : -Infinity;
+                    // --- end PMA logic ---
+
+                    // store distance placeholder
                     row.dataset.distanceMeters = Infinity;
+
                     row.insertCell(0).innerHTML = feature.properties.NAME || '';
                     row.insertCell(1).innerHTML = feature.properties.PMA || '';
                     row.insertCell(2).innerHTML = Number(feature.properties.PARKSBND_AREA || 0).toFixed(0);
@@ -152,24 +169,28 @@
                 });
 
                 map.on('load', () => {
+                    // add parks source and layers (circle + optional icon symbol)
                     if (!map.getSource('parks')) {
                         map.addSource('parks', { type: 'geojson', data: parksData });
                     }
 
+                    // circle layer used to show park location (smaller, dark green, white outline)
                     if (!map.getLayer('parks-circle')) {
                         map.addLayer({
                             id: 'parks-circle',
                             type: 'circle',
                             source: 'parks',
                             paint: {
-                                'circle-radius': 4,
-                                'circle-color': '#114B35',
-                                'circle-stroke-color': '#ffffff',
+                                'circle-radius': 4,                 // smaller
+                                'circle-color': '#114B35',         // dark green
+                                'circle-stroke-color': '#ffffff',  // white outline
                                 'circle-stroke-width': 2,
                                 'circle-opacity': 0.95
                             }
                         });
                     }
+
+                    // neighborhoods: intentionally no blue fill/haze; can add outline if desired.
                 });
 
             } catch (err) {
@@ -191,6 +212,7 @@
                 const feat = parksData.features[idx];
                 const coords = getFeatureLonLat(feat);
                 let distance = Infinity;
+                // use Number.isFinite to avoid coercion (null -> 0)
                 if (coords && coords.length >= 2 && Number.isFinite(userLat) && Number.isFinite(userLon)) {
                     distance = haversineDistanceMeters(userLat, userLon, coords[1], coords[0]);
                 }
@@ -200,23 +222,38 @@
         }
 
         // ----------------------------
-        // Sort by PMA (kept)
+        // Optimized Sort by PMA (desc)
         // ----------------------------
         document.getElementById("sort-btn").addEventListener("click", () => {
             const table = document.querySelector("table");
-            let switching = true;
-            while (switching) {
-                switching = false;
-                const rows = table.rows;
-                for (let i = 1; i < rows.length - 1; i++) {
-                    let x = parseFloat(rows[i].cells[1].innerHTML) || 0;
-                    let y = parseFloat(rows[i + 1].cells[1].innerHTML) || 0;
-                    if (x < y) {
-                        rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);
-                        switching = true;
-                        break;
-                    }
-                }
+
+            // collect rows (skip header)
+            const rows = Array.from(table.rows).slice(1);
+
+            // prepare array with numeric PMA for stable and fast sorting
+            const rowObjs = rows.map((row, idx) => {
+                // prefer the cached numeric property, fallback to dataset parse
+                const pmaNumeric = (typeof row._pmaNum === 'number') ? row._pmaNum :
+                                   (Number.isFinite(Number(row.dataset.pma)) ? Number(row.dataset.pma) : -Infinity);
+                return { row, pmaNumeric, idx };
+            });
+
+            // sort descending by pmaNumeric (stable via index fallback)
+            rowObjs.sort((a, b) => {
+                if (a.pmaNumeric > b.pmaNumeric) return -1;
+                if (a.pmaNumeric < b.pmaNumeric) return 1;
+                // tie-breaker: original order to keep stability
+                return a.idx - b.idx;
+            });
+
+            // use DocumentFragment for minimal reflow
+            const frag = document.createDocumentFragment();
+            for (const obj of rowObjs) frag.appendChild(obj.row);
+            // append sorted rows back into tbody (or table)
+            if (table.tBodies && table.tBodies.length > 0) {
+                table.tBodies[0].appendChild(frag);
+            } else {
+                table.appendChild(frag);
             }
         });
 
@@ -233,7 +270,7 @@
                 const lngLat = customPinMarker.getLngLat();
                 userLat = lngLat.lat;
                 userLon = lngLat.lng;
-                updateAllDistancesAndSortTable();
+                updateAllDistancesAndSortTable(); // pin path already sorts
                 map.flyTo({ center: [userLon, userLat], zoom: 14 });
                 return;
             }
@@ -241,7 +278,7 @@
             if (!navigator.geolocation) {
                 alert("Geolocation is not available in this browser.");
                 return;
-            }
+           }
 
             const btn = this;
             btn.disabled = true;
@@ -257,6 +294,7 @@
                     .setPopup(new maplibregl.Popup({ offset: 25 }).setText('Your location'))
                     .addTo(map);
 
+                // *** Important: update distances AND sort the table ***
                 updateAllDistancesAndSortTable();
 
                 btn.disabled = false;
@@ -425,40 +463,15 @@
         }
 
         // ----------------------------
-        // NEW: Sidebar show/hide toggle behavior
+        // Sidebar toggle
         // ----------------------------
-        (function setupSidebarToggle() {
-            const toggleBtn = document.getElementById("toggle-panel");
-            const sidePanel = document.getElementById("side-panel");
-            const mapDiv = document.getElementById("map");
-
-            // ensure main layout uses flex so map expands/shrinks (we set inline in HTML)
-            // Start state: keep side-panel visible (unless external CSS hides it)
-            // Clicking toggles visibility by changing display, and calls map.resize() so MapLibre repaints.
-            toggleBtn.addEventListener("click", () => {
-                const isHidden = window.getComputedStyle(sidePanel).display === 'none';
-                if (isHidden) {
-                    // show it
-                    sidePanel.style.display = '';
-                    // optionally animate
-                    sidePanel.style.transition = 'transform 100ms, opacity 100ms';
-                    sidePanel.style.opacity = '1';
-                } else {
-                    // hide it
-                    sidePanel.style.transition = 'transform 100ms, opacity 100ms';
-                    sidePanel.style.opacity = '0';
-                    // set display none after transition
-                    setTimeout(() => {
-                        sidePanel.style.display = 'none';
-                    }, 200);
-                }
-                // tell the map to resize so it fills the new space correctly
-                try { map.resize(); } catch (e) { /* ignore */ }
-            });
-        })();
+        document.getElementById("toggle-panel").addEventListener("click", () => {
+            document.getElementById("side-panel").classList.toggle("collapsed");
+            document.getElementById("toggle-panel").classList.toggle("shifted");
+        });
 
         // ----------------------------
-        // Sidebar drag & drop pin logic (same UX as before)
+        // Drag & drop pin logic (same UX as before)
         // ----------------------------
         const dropPin = document.getElementById('drop-pin');
         const mapDiv = document.getElementById('map');
@@ -500,7 +513,7 @@
             customPinMarker = new maplibregl.Marker({ element: outer, draggable: true })
               .setLngLat([lng, lat])
               .addTo(map);
-
+            // AUTHORITATIVE: set user location to the pin immediately
             userLat = lat;
             userLon = lng;
 
@@ -542,12 +555,15 @@
                         userLat = userLon = null;
                     }
                 } catch (e) {
+                    // defensively clear if anything goes wrong
                     userLat = userLon = null;
                 }
             } else {
+                // no device location available -> clear user coords so table shows em-dashes
                 userLat = userLon = null;
             }
 
+            // reset buffer AND reset dropdown UI, then refresh distances
             applyBuffer(null);
             resetBufferDropdown();
             updateAllDistancesAndSortTable();
@@ -556,18 +572,26 @@
         // ----------------------------
         // Hover popup for parks (name + distance or em-dash)
         // ----------------------------
+        // create single popup instance that we reuse
         const hoverPopup = new maplibregl.Popup({
             closeButton: false,
             closeOnClick: false,
             offset: 10
         });
 
+        // show popup on mouseenter on parks-circle
         map.on('mouseenter', 'parks-circle', (e) => {
+            // change cursor
             map.getCanvas().style.cursor = 'pointer';
+
+            // get first feature under mouse
             const feature = e.features && e.features[0];
             if (!feature) return;
+
             const coords = getFeatureLonLat(feature);
             let html = `<strong>${feature.properties.NAME || 'Unnamed'}</strong>`;
+
+            // Always show a distance line: formatted distance if known, otherwise em-dash "—"
             if (coords && coords.length >= 2) {
                 if (Number.isFinite(userLat) && Number.isFinite(userLon)) {
                     const dist = haversineDistanceMeters(userLat, userLon, coords[1], coords[0]);
@@ -578,6 +602,8 @@
             } else {
                 html += `<div style="margin-top:4px; font-size:90%;">Distance: —</div>`;
             }
+
+            // place popup at the feature coordinate
             if (coords) {
                 hoverPopup.setLngLat(coords).setHTML(html).addTo(map);
             }
@@ -588,9 +614,11 @@
             hoverPopup.remove();
         });
 
+        // Ensure the parks-circle layer exists before attaching hover events.
+        // If the layer isn't ready yet, listen for 'load' and attach events after source/layer creation.
         map.on('styledata', () => {
             if (map.getLayer('parks-circle')) {
-                // no-op
+                // layer exists; no-op here because we've already attached events.
             }
         });
 

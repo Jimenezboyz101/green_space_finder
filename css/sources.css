@@ -1,0 +1,66 @@
+/* General layout */
+body {
+    background-color: #f4f6f7;
+    color: #2c3e50;
+    margin: 0;
+    padding: 0;
+}
+
+.sources-container {
+    max-width: 900px;
+    margin: 40px auto;
+    padding: 0 20px;
+}
+
+/* Page header */
+.page-header h1 {
+    font-size: 28px;
+    margin-bottom: 10px;
+    color: #27ae60;
+    border-bottom: 2px solid #27ae60;
+    padding-bottom: 6px;
+}
+
+.page-header .intro {
+    font-size: 16px;
+    color: #34495e;
+    margin-bottom: 30px;
+}
+
+/* Section headers */
+.source-section h2 {
+    font-size: 22px;
+    color: #2c3e50;
+    margin-top: 40px;
+    margin-bottom: 12px;
+    border-left: 4px solid #27ae60;
+    padding-left: 10px;
+}
+
+/* Lists */
+.source-list {
+    list-style-type: disc;
+    padding-left: 20px;
+    margin-bottom: 20px;
+}
+
+.source-list li {
+    margin-bottom: 8px;
+    font-size: 15px;
+    color: #2c3e50;
+}
+
+.source-list li strong {
+    color: #27ae60;
+}
+
+/* Citations */
+.source-section p {
+    font-size: 15px;
+    color: #2c3e50;
+    margin-bottom: 12px;
+}
+
+.source-section i {
+    color: #16a085;
+}
