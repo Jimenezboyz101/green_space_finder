@@ -2,7 +2,7 @@
 <html lang="en-US">
 <head>
     <meta charset="utf-8" />
-    <title>Seattle Parks — Satellite</title>
+    <title>Map | Seattle Green Space Finder</title>
     <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
 
     <!-- MapLibre GL JS -->
@@ -16,7 +16,7 @@
 <body>
     <header>
         <nav>
-            <a href="index.html" class="logo">Green Space Finder</a>
+            <a href="index.html" class="logo">Seattle Green Space Finder</a>
             <div class="nav-links">
                 <a href="index.html">Home</a>
                 <a href="map.html"aria-current="page">Map</a>
@@ -111,12 +111,21 @@
             const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
             return R * c;
         }
-        function formatDistance(meters) {
-            // return em-dash when unknown
-            if (!Number.isFinite(meters)) return "—";
-            if (meters < 1000) return Math.round(meters) + " m";
-            return (meters / 1000).toFixed(2) + " km";
+
+        // ----------------------------
+        // NEW: display distances in miles
+        // ----------------------------
+        function metersToMiles(meters) {
+            return meters / 1609.344;
         }
+
+        // formatDistance: convert meters -> miles string with 2 decimals; unknown -> em-dash
+        function formatDistance(meters) {
+            if (!Number.isFinite(meters)) return "—";
+            const miles = metersToMiles(meters);
+            return miles.toFixed(2) + " mi";
+        }
+
         function getFeatureLonLat(feature) {
             if (!feature || !feature.geometry) return null;
             if (feature.geometry.type === "Point") return feature.geometry.coordinates;
@@ -152,7 +161,7 @@
                     row._pmaNum = Number.isFinite(pmaNum) ? pmaNum : -Infinity;
                     // --- end PMA logic ---
 
-                    // store distance placeholder
+                    // store distance placeholder (meters)
                     row.dataset.distanceMeters = Infinity;
 
                     row.insertCell(0).innerHTML = feature.properties.NAME || '';
@@ -216,7 +225,9 @@
                 if (coords && coords.length >= 2 && Number.isFinite(userLat) && Number.isFinite(userLon)) {
                     distance = haversineDistanceMeters(userLat, userLon, coords[1], coords[0]);
                 }
+                // store meters internally for logic that needs meters
                 row.dataset.distanceMeters = distance;
+                // display miles in UI
                 row.cells[3].innerText = formatDistance(distance);
             });
         }
@@ -260,6 +271,7 @@
         // ----------------------------
         // Sort by Distance (prefers custom pin)
         // ----------------------------
+
         document.getElementById("sort-distance-btn").addEventListener("click", function () {
             if (!parksData || !parksData.features) {
                 alert("Parks data is still loading — try again in a second.");

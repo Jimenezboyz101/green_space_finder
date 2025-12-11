@@ -22,9 +22,17 @@ body {
 }
 
 .page-header .intro {
-    font-size: 16px;
-    color: #34495e;
-    margin-bottom: 30px;
+  font-size: 22px;
+  color: #2c3e50;
+  margin-top: 40px;
+  margin-bottom: 12px;
+  border-bottom: 4px solid #043c00;
+  padding-bottom: 10px;
+  text-align: center;        /* center the text */
+  font-weight: 700;          /* strong / bold */
+  font-family: Inter, "Helvetica Neue", Arial, sans-serif;
+  line-height: 1.25;         /* tighter, more impactful */
+  letter-spacing: 0.2px;
 }
 
 /* Section headers */
@@ -33,7 +41,7 @@ body {
     color: #2c3e50;
     margin-top: 40px;
     margin-bottom: 12px;
-    border-left: 4px solid #27ae60;
+    border-left: 4px solid #043c00;
     padding-left: 10px;
 }
 

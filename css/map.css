@@ -76,7 +76,7 @@ header {
     align-items: center;
     gap: 12px;
     margin-bottom: 12px;
-    font-size: 13px;
+    font-size: 18px;
     color: #444;
 }
 
@@ -96,7 +96,8 @@ header {
    target the three known buttons and style them so they act like a 3-column row */
 #side-panel > #sort-btn,
 #side-panel > #sort-distance-btn,
-#side-panel > #buffer-btn {
+#side-panel > #buffer-btn,
+#side-panel > #buffer-select {
     display: inline-block;
     width: calc((100% - 30px) / 3);   /* three equal columns with 8px gaps on each side */
     box-sizing: border-box;
@@ -112,13 +113,17 @@ header {
 }
 
 /* remove extra margin on the last button so visual spacing is even */
-#side-panel > #buffer-btn { margin-right: 0; }
+#side-panel > #buffer-btn,
+#side-panel > #buffer-select {
+    margin-right: 0;
+}
 
 /* If you add the .control-row wrapper, use these for hover/focus */
 #side-panel .control-row button,
 #side-panel > #sort-btn:hover,
 #side-panel > #sort-distance-btn:hover,
-#side-panel > #buffer-btn:hover {
+#side-panel > #buffer-btn:hover,
+#side-panel > #buffer-select:hover {
     transform: translateY(-1px);
     box-shadow: 0 4px 10px rgba(0,0,0,0.12);
 }
@@ -126,7 +131,8 @@ header {
 /* Accessibility focus */
 #side-panel > #sort-btn:focus,
 #side-panel > #sort-distance-btn:focus,
-#side-panel > #buffer-btn:focus {
+#side-panel > #buffer-btn:focus,
+#side-panel > #buffer-select:focus {
     outline: 3px solid rgba(4,60,0,0.15);
     outline-offset: 2px;
 }
@@ -169,7 +175,8 @@ th.distance-header { text-align: right; }
     /* fallback: make buttons full width when side-panel would be small */
     #side-panel > #sort-btn,
     #side-panel > #sort-distance-btn,
-    #side-panel > #buffer-btn {
+    #side-panel > #buffer-btn,
+    #side-panel > #buffer-select {
         width: 100%;
         margin: 0 0 8px 0;
     }
