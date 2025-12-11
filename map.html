@@ -56,9 +56,6 @@
     </main>
 
     <script>
-        // ----------------------------
-        // MapLibre map with satellite raster tiles (Esri World Imagery)
-        // ----------------------------
         const satelliteStyle = {
             version: 8,
             name: "Esri World Imagery (simple)",
@@ -90,19 +87,15 @@
             zoom: 11
         });
 
-        // ----------------------------
-        // App state & helpers
-        // ----------------------------
         let parksData = null;
         let originalParksGeoJSON = null;
 
         let deviceMarker = null;
         let customPinMarker = null;
-        let userLat = null, userLon = null; // cleared when unknown
+        let userLat = null, userLon = null;
 
         function toRad(deg) { return deg * Math.PI / 180; }
         function haversineDistanceMeters(lat1, lon1, lat2, lon2) {
-            // require Number.isFinite so null/undefined are not treated as valid coords
             if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) return Infinity;
             const R = 6371000;
             const dLat = toRad(lat2 - lat1);
@@ -112,14 +105,12 @@
             return R * c;
         }
 
-        // ----------------------------
-        // NEW: display distances in miles
-        // ----------------------------
+        // Display distances in miles
         function metersToMiles(meters) {
             return meters / 1609.344;
         }
 
-        // formatDistance: convert meters -> miles string with 2 decimals; unknown -> em-dash
+        // formatDistance: convert meters -> miles
         function formatDistance(meters) {
             if (!Number.isFinite(meters)) return "—";
             const miles = metersToMiles(meters);
@@ -132,9 +123,7 @@
             return null;
         }
 
-        // ----------------------------
         // Load GeoJSON (parks & neighborhoods)
-        // ----------------------------
         async function geojsonFetch() {
             try {
                 const parksResp = await fetch('assets/parks.geojson');
@@ -150,18 +139,13 @@
                     let row = table.insertRow(-1);
                     row.dataset.parkIndex = idx;
 
-                    // --- WORKING PMA LOGIC MERGED IN ---
                     // Read text, normalize (strip commas/whitespace), parse numeric PMA
                     const pmaRaw = feature.properties && feature.properties.PMA ? String(feature.properties.PMA) : '';
                     const pmaNormalized = pmaRaw.replace(/,/g, '').trim();
                     const pmaNum = Number(pmaNormalized);
-                    // store both dataset (string) and a numeric property for fast sort
                     row.dataset.pma = Number.isFinite(pmaNum) ? String(pmaNum) : String(NaN);
-                    // numeric property avoids repeated Number(...) conversions later
                     row._pmaNum = Number.isFinite(pmaNum) ? pmaNum : -Infinity;
-                    // --- end PMA logic ---
 
-                    // store distance placeholder (meters)
                     row.dataset.distanceMeters = Infinity;
 
                     row.insertCell(0).innerHTML = feature.properties.NAME || '';
@@ -178,30 +162,26 @@
                 });
 
                 map.on('load', () => {
-                    // add parks source and layers (circle + optional icon symbol)
                     if (!map.getSource('parks')) {
                         map.addSource('parks', { type: 'geojson', data: parksData });
                     }
 
-                    // circle layer used to show park location (smaller, dark green, white outline)
+                    // circle layer used to show park location
                     if (!map.getLayer('parks-circle')) {
                         map.addLayer({
                             id: 'parks-circle',
                             type: 'circle',
                             source: 'parks',
                             paint: {
-                                'circle-radius': 4,                 // smaller
-                                'circle-color': '#114B35',         // dark green
-                                'circle-stroke-color': '#ffffff',  // white outline
+                                'circle-radius': 4,
+                                'circle-color': '#114B35',
+                                'circle-stroke-color': '#ffffff',
                                 'circle-stroke-width': 2,
                                 'circle-opacity': 0.95
                             }
                         });
                     }
-
-                    // neighborhoods: intentionally no blue fill/haze; can add outline if desired.
                 });
-
             } catch (err) {
                 console.error("Failed to load geojson:", err);
                 alert("Error loading map data. See console for details.");
@@ -210,9 +190,7 @@
 
         geojsonFetch();
 
-        // ----------------------------
         // Update distances & table
-        // ----------------------------
         function updateAllDistancesAndTable() {
             const table = document.querySelector("table");
             const rows = Array.from(table.rows).slice(1);
@@ -221,46 +199,34 @@
                 const feat = parksData.features[idx];
                 const coords = getFeatureLonLat(feat);
                 let distance = Infinity;
-                // use Number.isFinite to avoid coercion (null -> 0)
                 if (coords && coords.length >= 2 && Number.isFinite(userLat) && Number.isFinite(userLon)) {
                     distance = haversineDistanceMeters(userLat, userLon, coords[1], coords[0]);
                 }
-                // store meters internally for logic that needs meters
                 row.dataset.distanceMeters = distance;
-                // display miles in UI
                 row.cells[3].innerText = formatDistance(distance);
             });
         }
 
-        // ----------------------------
-        // Optimized Sort by PMA (desc)
-        // ----------------------------
+        // Sort by PMA
         document.getElementById("sort-btn").addEventListener("click", () => {
             const table = document.querySelector("table");
-
-            // collect rows (skip header)
             const rows = Array.from(table.rows).slice(1);
 
-            // prepare array with numeric PMA for stable and fast sorting
             const rowObjs = rows.map((row, idx) => {
-                // prefer the cached numeric property, fallback to dataset parse
                 const pmaNumeric = (typeof row._pmaNum === 'number') ? row._pmaNum :
                                    (Number.isFinite(Number(row.dataset.pma)) ? Number(row.dataset.pma) : -Infinity);
                 return { row, pmaNumeric, idx };
             });
 
-            // sort descending by pmaNumeric (stable via index fallback)
+            // sort descending by pma
             rowObjs.sort((a, b) => {
                 if (a.pmaNumeric > b.pmaNumeric) return -1;
                 if (a.pmaNumeric < b.pmaNumeric) return 1;
-                // tie-breaker: original order to keep stability
                 return a.idx - b.idx;
             });
 
-            // use DocumentFragment for minimal reflow
             const frag = document.createDocumentFragment();
             for (const obj of rowObjs) frag.appendChild(obj.row);
-            // append sorted rows back into tbody (or table)
             if (table.tBodies && table.tBodies.length > 0) {
                 table.tBodies[0].appendChild(frag);
             } else {
@@ -268,10 +234,7 @@
             }
         });
 
-        // ----------------------------
         // Sort by Distance (prefers custom pin)
-        // ----------------------------
-
         document.getElementById("sort-distance-btn").addEventListener("click", function () {
             if (!parksData || !parksData.features) {
                 alert("Parks data is still loading — try again in a second.");
@@ -282,7 +245,7 @@
                 const lngLat = customPinMarker.getLngLat();
                 userLat = lngLat.lat;
                 userLon = lngLat.lng;
-                updateAllDistancesAndSortTable(); // pin path already sorts
+                updateAllDistancesAndSortTable();
                 map.flyTo({ center: [userLon, userLat], zoom: 14 });
                 return;
             }
@@ -306,7 +269,6 @@
                     .setPopup(new maplibregl.Popup({ offset: 25 }).setText('Your location'))
                     .addTo(map);
 
-                // *** Important: update distances AND sort the table ***
                 updateAllDistancesAndSortTable();
 
                 btn.disabled = false;
@@ -334,9 +296,7 @@
             for (let entry of rowsWithDistances) table.tBodies[0].appendChild(entry.row);
         }
 
-        // ----------------------------
         // Buffer (prefers custom pin)
-        // ----------------------------
         const bufferBtn = document.getElementById("buffer-btn");
         function milesToMeters(miles) { return miles * 1609.344; }
         function applyBuffer(radiusMeters) {
@@ -464,27 +424,21 @@
             });
         }
 
-        // New helper: reset the buffer dropdown to 'none' if it exists
+        // Reset the buffer dropdown to 'none' if it exists
         function resetBufferDropdown() {
             const sel = document.getElementById('buffer-select');
             if (sel) {
                 sel.value = 'none';
-                // ensure the map and table reflect no buffer
                 applyBuffer(null);
             }
         }
 
-        // ----------------------------
-        // Sidebar toggle
-        // ----------------------------
         document.getElementById("toggle-panel").addEventListener("click", () => {
             document.getElementById("side-panel").classList.toggle("collapsed");
             document.getElementById("toggle-panel").classList.toggle("shifted");
         });
 
-        // ----------------------------
-        // Drag & drop pin logic (same UX as before)
-        // ----------------------------
+        // Drag & drop pin logic
         const dropPin = document.getElementById('drop-pin');
         const mapDiv = document.getElementById('map');
 
@@ -517,19 +471,17 @@
         function placeCustomPin(lng, lat) {
             if (customPinMarker) removeCustomPin();
 
-            const outer = document.createElement('div'); // this is what MapLibre moves
-            const inner = document.createElement('div'); // this is where you style
+            const outer = document.createElement('div');
+            const inner = document.createElement('div');
             inner.className = 'marker-clickable';
             outer.appendChild(inner);
 
             customPinMarker = new maplibregl.Marker({ element: outer, draggable: true })
               .setLngLat([lng, lat])
               .addTo(map);
-            // AUTHORITATIVE: set user location to the pin immediately
             userLat = lat;
             userLon = lng;
 
-            // reset buffer and refresh distances immediate to the pin location
             applyBuffer(null);
             resetBufferDropdown();
 
@@ -554,8 +506,6 @@
             if (!customPinMarker) return;
             try { customPinMarker.remove(); } catch(e){}
             customPinMarker = null;
-
-            // FALLBACK: use deviceMarker's coords if we already have it
             if (deviceMarker) {
                 try {
                     const pos = deviceMarker.getLngLat();
@@ -567,24 +517,17 @@
                         userLat = userLon = null;
                     }
                 } catch (e) {
-                    // defensively clear if anything goes wrong
                     userLat = userLon = null;
                 }
             } else {
-                // no device location available -> clear user coords so table shows em-dashes
                 userLat = userLon = null;
             }
-
-            // reset buffer AND reset dropdown UI, then refresh distances
             applyBuffer(null);
             resetBufferDropdown();
             updateAllDistancesAndSortTable();
         }
 
-        // ----------------------------
         // Hover popup for parks (name + distance or em-dash)
-        // ----------------------------
-        // create single popup instance that we reuse
         const hoverPopup = new maplibregl.Popup({
             closeButton: false,
             closeOnClick: false,
@@ -593,17 +536,13 @@
 
         // show popup on mouseenter on parks-circle
         map.on('mouseenter', 'parks-circle', (e) => {
-            // change cursor
             map.getCanvas().style.cursor = 'pointer';
-
-            // get first feature under mouse
             const feature = e.features && e.features[0];
             if (!feature) return;
 
             const coords = getFeatureLonLat(feature);
             let html = `<strong>${feature.properties.NAME || 'Unnamed'}</strong>`;
 
-            // Always show a distance line: formatted distance if known, otherwise em-dash "—"
             if (coords && coords.length >= 2) {
                 if (Number.isFinite(userLat) && Number.isFinite(userLon)) {
                     const dist = haversineDistanceMeters(userLat, userLon, coords[1], coords[0]);
@@ -614,8 +553,6 @@
             } else {
                 html += `<div style="margin-top:4px; font-size:90%;">Distance: —</div>`;
             }
-
-            // place popup at the feature coordinate
             if (coords) {
                 hoverPopup.setLngLat(coords).setHTML(html).addTo(map);
             }
@@ -627,10 +564,8 @@
         });
 
         // Ensure the parks-circle layer exists before attaching hover events.
-        // If the layer isn't ready yet, listen for 'load' and attach events after source/layer creation.
         map.on('styledata', () => {
             if (map.getLayer('parks-circle')) {
-                // layer exists; no-op here because we've already attached events.
             }
         });
 
